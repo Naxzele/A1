@@ -81,7 +81,7 @@ class PriorityGroupMedianImputer:
                         df.loc[missing_mask, col] = (
                             df.loc[missing_mask]
                             .groupby(group_cols)[col]
-                            .transform(lambda x: x.fillna(self.medians_[key][x.name]))
+                            .transform(lambda x: x.fillna(self.medians_[key].get(x.name) if x.name in self.medians_[key] else x))
                         )
                         # Update mask for next priority level
                         missing_mask = df[col].isna()
@@ -97,3 +97,4 @@ class PriorityGroupMedianImputer:
     def fit_transform(self, df):
         """Fit and transform in one step."""
         return self.fit(df).transform(df)
+        
