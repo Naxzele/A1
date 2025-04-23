@@ -12,12 +12,13 @@ class PriorityGroupImputer:
         Higher priority (lower number) will be attempted first.
     """
 
-    def __init__(self, target_cols, strategy, priority_groups=None):
+    def __init__(self, target_cols, strategy, data_source=None,priority_groups=None):
         self.priority_groups = priority_groups
         self.target_cols = target_cols if isinstance(target_cols, list) else [target_cols]
         self.lookup_ = {}  # Stores learned medians for transform()
         self.priority_order_ = None  # Will store sorted priority levels
         self.strategy = strategy # Will store the method of imputation
+        self.source = data_source
 
     def _get_agg_function(self):
         """Return the aggregation function for the chosen strategy."""
@@ -27,6 +28,8 @@ class PriorityGroupImputer:
             return "median"
         elif self.strategy == "mode":
             return lambda x: x.mode().iloc[0] if not x.mode().empty else None
+        elif self.strategy == "external":
+            return "external"
         else:
             raise ValueError(f"Unsupported strategy: {self.strategy}")
 
@@ -49,11 +52,11 @@ class PriorityGroupImputer:
                 group_cols = self.priority_groups[priority]
                 for col in self.target_cols:
                     key = (priority, tuple(group_cols), col)
-                    self.lookup_[key] = df.groupby(group_cols, observed=False)[col].agg(agg_func)
+                    self.lookup_[key] = df.groupby(group_cols, observed=False)[col].agg(agg_func) if self.strategy!="external" else self.source[col]
         
         # Calculate global medians as fallback
-        for col in self.target_cols:
-            self.lookup_[('global', None, col)] = df[col].agg(agg_func)
+        # for col in self.target_cols:
+        #     self.lookup_[('global', None, col)] = df[col].agg(agg_func) if self.strategy!="external" else self.source[col]
             
         return self
 
@@ -100,10 +103,10 @@ class PriorityGroupImputer:
                         missing_mask = df[col].isna()
             
             # Final fallback to global median for any remaining NAs
-            if missing_mask.any():
-                df.loc[missing_mask, col] = df.loc[missing_mask, col].fillna(
-                    self.lookup_[('global', None, col)]
-                )
+            # if missing_mask.any():
+            #     df.loc[missing_mask, col] = df.loc[missing_mask, col].fillna(
+            #         self.lookup_[('global', None, col)]
+            #     )
                 
         return df
 
