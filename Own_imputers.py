@@ -49,7 +49,7 @@ class PriorityGroupImputer:
                 group_cols = self.priority_groups[priority]
                 for col in self.target_cols:
                     key = (priority, tuple(group_cols), col)
-                    self.lookup_[key] = df.groupby(group_cols)[col].agg(agg_func)
+                    self.lookup_[key] = df.groupby(group_cols, observed=False)[col].agg(agg_func)
         
         # Calculate global medians as fallback
         for col in self.target_cols:
@@ -93,7 +93,7 @@ class PriorityGroupImputer:
                         # Perform the group imputation for current priority
                         df.loc[missing_mask, col] = (
                             df.loc[missing_mask]
-                            .groupby(group_cols)[col]
+                            .groupby(group_cols, observed=False)[col]
                             .transform(lambda x: x.fillna(self.lookup_[key].get(x.name) if x.name in self.lookup_[key] else x))
                         )
                         # Update mask for next priority level
