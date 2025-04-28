@@ -25,29 +25,7 @@ class feature_engineering:
         self.cl_name = cl_name
         self.clustering = clustering
         self.cluster_range = cluster_range
-        # self.transform_type_nocount = [x for x in self.transform_type if x != 'count']
-
-    def cluster_labels(self, df, features, cl_name, cluster_range):
-        X = df.copy()
-        X_scaled = X.loc[:, features]
-        X_scaled = (X_scaled - X_scaled.mean(axis=0)) / X_scaled.std(axis=0)
-        X_new = pd.DataFrame()
-        for cl in cluster_range:
-            kmeans = KMeans(n_clusters=cl, n_init=50, random_state=0)
-            X_new[f'{cl_name}{cl}'] = kmeans.fit_predict(X_scaled)
-        return X_new
-    
-    def cluster_pred(self, df_train, df_test, features, cl_name, cluster_range):
-        clp = KNeighborsClassifier(n_neighbors=3, weights='distance')
-        X = pd.DataFrame()
-        if cluster_range is None:
-            clp.fit(df_train[features],df_train[cl_name])
-            X[cl_name]= clp.predict(df_test[features])
-        else:
-            for cl in cluster_range:
-                clp.fit(df_train[features],df_train[f'{cl_name}{cl}'])
-                X[f'{cl_name}{cl}']= clp.predict(df_test[features])
-        return X
+        self.kmeans = {}
     
     def GroupTransform(self, df, group, targets, transform_type, cluster_range):
         X = {}
@@ -73,7 +51,9 @@ class feature_engineering:
 
     def train(self, df):
         if self.clustering:
-            df = df.join(self.cluster_labels(df, self.features, self.cl_name, self.cluster_range))
+            for cl in self.cluster_range:
+                self.kmeans[f'{self.cl_name}{cl}'] = KMeans(n_clusters=cl, n_init=50, random_state=0)
+                df[f'{self.cl_name}{cl}'] = self.kmeans[f'{self.cl_name}{cl}'].fit_predict(df[self.features])
 
         if self.cl_name is not None:
             self.transforms.update(self.GroupTransform(df, self.cl_name, self.targets, self.transform_type, self.cluster_range))
@@ -89,13 +69,14 @@ class feature_engineering:
 
         return df
 
-    def test(self, df_train, df_test):
+    def test(self, df):
         if self.clustering:
-            df_test = df_test.join(self.cluster_pred(df_train, df_test, self.features, self.cl_name, self.cluster_range))
+            for cl in self.cluster_range:
+                df[f'{self.cl_name}{cl}'] = self.kmeans[f'{self.cl_name}{cl}'].predict(df[self.features])
 
         for key in self.transforms.keys():
-            df_test = df_test.merge(self.transforms[key], left_on=key.split('-')[1], right_index=True)
+            df = df.merge(self.transforms[key], left_on=key.split('-')[1], right_index=True)
             if self.comp_type is not None:
-                df_test = df_test.join(self.CompInGroup(df_test, key, self.comp_type))
+                df = df.join(self.CompInGroup(df, key, self.comp_type))
 
-        return df_test
+        return df
