@@ -3,7 +3,7 @@ from sklearn.cluster import KMeans
 import pandas as pd
 
 class feature_engineering:
-    def __init__(self, targets, transform_type, comp_type, groups=None, features=None, cl_name=None, clustering=False, cluster_range=None):
+    def __init__(self, targets, transform_type, comp_type, comp_agg=None, groups=None, features=None, cl_name=None, clustering=False, cluster_range=None):
         """
         Inputs:
             - targets: aggregating features
@@ -20,6 +20,7 @@ class feature_engineering:
         self.targets = targets
         self.transform_type = transform_type
         self.comp_type = comp_type
+        self.comp_agg = comp_agg
         self.groups = groups
         self.features = features
         self.cl_name = cl_name
@@ -38,7 +39,7 @@ class feature_engineering:
                         X[f"{target}-{group}{cl}-{tt}"]= df.groupby(f"{group}{cl}", observed=False)[target].agg(tt).to_frame(name=f"{target}-{group}{cl}-{tt}")
         return X
 
-    def CompInGroup(self, df, comp_col, comp_type):
+    def CompInGroup(self, df, comp_col, comp_type, comp_agg=None):
         X = pd.DataFrame()
         for ct in comp_type:
             lst = comp_col.split('-')
@@ -47,6 +48,11 @@ class feature_engineering:
                     X[f"{comp_col}-{ct}"] = df[lst[0]] - df[comp_col]
                 if ct == 'frac':
                     X[f"{comp_col}-{ct}"] = df[lst[0]]/df[comp_col]
+            else:
+                if ct == 'diff':
+                    X[f"{comp_col}-{ct}-{comp_agg}"] = df[comp_col] - df[comp_col].agg(comp_agg)
+                if ct == 'frac':
+                    X[f"{comp_col}-{ct}-{comp_agg}"] = df[comp_col]/df[comp_col].agg(comp_agg)
         return X
 
     def train(self, df):
@@ -65,7 +71,7 @@ class feature_engineering:
         for key in self.transforms.keys():
             df = df.merge(self.transforms[key], left_on=key.split('-')[1], right_index=True)
             if self.comp_type is not None:
-                df = df.join(self.CompInGroup(df, key, self.comp_type))
+                df = df.join(self.CompInGroup(df, key, self.comp_type, self.comp_agg))
 
         return df
 
@@ -77,6 +83,6 @@ class feature_engineering:
         for key in self.transforms.keys():
             df = df.merge(self.transforms[key], left_on=key.split('-')[1], right_index=True)
             if self.comp_type is not None:
-                df = df.join(self.CompInGroup(df, key, self.comp_type))
+                df = df.join(self.CompInGroup(df, key, self.comp_type, self.comp_agg))
 
         return df
