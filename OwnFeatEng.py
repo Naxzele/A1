@@ -1,6 +1,7 @@
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.cluster import KMeans
 import pandas as pd
+from collections import defaultdict
 
 class feature_engineering:
     def __init__(self, targets=None, transform_type=None, comp_type=None, comp_agg=None, groups=None, features=None, cl_name=None, clustering=False, cluster_range=None):
@@ -88,3 +89,61 @@ class feature_engineering:
                     df = df.join(self.CompInGroup(df, key, self.comp_type, self.comp_agg))
 
         return df
+    
+class feature_selection:
+    def __init__(self, feature_importance=None, threshold=0.9):
+        self.fi = feature_importance
+        self.threshold = threshold
+
+    def select_low_correlation_features(self, df, threshold=0.9):
+        corr_matrix = df.corr().abs()
+        clusters = defaultdict(list)
+        dropped_features = set()
+        
+        # Create correlation clusters
+        for i, feature in enumerate(corr_matrix.columns):
+            if feature not in dropped_features:
+                # Find all features highly correlated with current feature
+                correlated = corr_matrix.index[corr_matrix[feature] > threshold].tolist()
+                clusters[feature].extend([f for f in correlated if f != feature])
+                
+                # Mark all correlated features (except self) for dropping
+                dropped_features.update([f for f in correlated if f != feature])
+        
+        # Get final selected features (cluster representatives)
+        selected_features = [f for f in corr_matrix.columns if f not in dropped_features]
+        
+        # Create cluster report
+        cluster_report = pd.DataFrame([(k, v) for k, v in clusters.items() if v],
+                                    columns=['Representative', 'Dropped Features'])
+        
+        return selected_features, cluster_report
+
+    def select_features_with_importance(self, df, feature_importance, threshold=0.9):
+        corr_matrix = df.corr().abs()
+        clusters = []
+        selected_features = []
+        
+        remaining_features = set(corr_matrix.columns)
+        
+        while remaining_features:
+            # Get most important remaining feature
+            best_feature = max(remaining_features, key=lambda x: feature_importance.get(x, 0))
+            selected_features.append(best_feature)
+            
+            # Find all correlated features
+            correlated = set(corr_matrix.index[corr_matrix[best_feature] > threshold].tolist())
+            clusters.append((best_feature, list(correlated - {best_feature})))
+            
+            # Remove all correlated features from remaining set
+            remaining_features -= correlated
+        
+        cluster_report = pd.DataFrame(clusters, columns=['Kept Feature', 'Dropped Features'])
+        return selected_features, cluster_report
+    
+    def select(self, df):
+        if self.fi is None:
+            self.selected_features_, self.cluster_report_ = self.select_low_correlation_features(df, self.threshold)
+        else:
+            self.selected_features_, self.cluster_report_ = self.select_features_with_importance(df, self.fi, self.threshold)
+        return self.selected_features_, self.cluster_report_
