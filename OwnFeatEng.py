@@ -152,91 +152,77 @@ class feature_selection:
         else:
             self.selected_features_, self.cluster_report_ = self.select_features_with_importance(df, self.fi, self.threshold)
         return self.selected_features_, self.cluster_report_
-    
 
-def add_geo_features_optimized(houses_gdf, features_gdf, tag, feature_type, radii=[500, 1000, 1500, 2000], max_rad=10000, area_calc=False):
-    """
-    Optimized version that:
-    1. Uses spatial indexing to only process nearby features
-    2. Handles both points and polygons
-    3. Calculates mean areas for polygons if area_calc is True
-    """
-
-    # Filter features
+def add_geo_features(houses_gdf, features_gdf, tag, feature_type, radii=[500, 1000, 1500, 2000], max_rad=10000, area_calc=False):
     features = features_gdf[
         (features_gdf[tag] == feature_type) & 
         (~features_gdf.geometry.is_empty)
     ].copy()
-    
-    if len(features) == 0:
+    if features.empty:
         return houses_gdf
-    
-    # Convert to UTM
+
     utm_crs = houses_gdf.estimate_utm_crs()
     houses_utm = houses_gdf.to_crs(utm_crs)
     features_utm = features.to_crs(utm_crs)
-    
-    # Only calculate area if needed
+
     if area_calc:
-        features_utm['area'] = 0.0
         poly_mask = features_utm.geometry.type.isin(['Polygon', 'MultiPolygon'])
-        features_utm.loc[poly_mask, 'area'] = features_utm[poly_mask].geometry.area
-    
-    # Build spatial index
-    print("Building spatial index...")
-    tree = STRtree(features_utm.geometry)
-    max_radius = max_rad
-    
-    # Prepare result columns
+        features_utm['area'] = 0.0
+        features_utm.loc[poly_mask, 'area'] = features_utm.loc[poly_mask].geometry.area
+    else:
+        features_utm['area'] = 0.0  # placeholder
+
+    houses_geom = houses_utm.geometry
+    features_geom = features_utm.geometry
+    tree = STRtree(features_geom)
+
+    # Get all intersecting pairs
+    buffers = houses_geom.buffer(max_rad)
+    matches_idx = tree.query(buffers, predicate='intersects')
+    house_ix, feat_ix = matches_idx
+
+    house_pts = houses_geom.iloc[house_ix].reset_index(drop=True)
+    feat_geom = features_geom.iloc[feat_ix].reset_index(drop=True)
+
+    # Use boundaries for polygons
+    feat_geom_use = feat_geom.where(
+        feat_geom.geom_type == 'Point',
+        feat_geom.boundary
+    )
+
+    # Compute distances
+    distances = house_pts.distance(feat_geom_use)
+    areas = features_utm.iloc[feat_ix].area.values
+
+    result_df = pd.DataFrame({
+        'house_idx': houses_geom.index[house_ix],
+        'distance': distances,
+        'area': areas
+    })
+
+    # Initialize result columns
     for col in [f'closest_{tag}*{feature_type}'] + \
                [f'median_{tag}*{feature_type}_{r}' for r in radii] + \
                [f'mean_{tag}*{feature_type}_{r}' for r in radii] + \
                [f'count_{tag}*{feature_type}_{r}' for r in radii] + \
                ([f'total_area_{tag}*{feature_type}_{r}' for r in radii] if area_calc else []):
-            if ('count' in col) or ('total_area' in col):
-                houses_gdf[col] = 0.00
-            else:
-                houses_gdf[col] = max_radius+5000.00
+        houses_gdf[col] = 0.0 if ('count' in col or 'total_area' in col) else (max_rad + 5000.0)
 
-    # Process each house
-    for i, house in tqdm(houses_utm.iterrows(), total=len(houses_utm)):
-        house_geom = house.geometry
-        buffer = house_geom.buffer(max_radius)
+    # Closest distance
+    closest_dist = result_df.groupby('house_idx')['distance'].min()
+    houses_gdf.loc[closest_dist.index, f'closest_{tag}*{feature_type}'] = closest_dist.values
 
-        # Find potentially nearby features using spatial index
-        possible_matches_idx = list(tree.query(buffer, predicate='intersects'))
-        if not possible_matches_idx:
-            continue
+    # Radius-based aggregations
+    for radius in radii:
+        mask = result_df['distance'] <= radius
+        group = result_df[mask].groupby('house_idx')
 
-        nearby_features = features_utm.iloc[possible_matches_idx]
-        distances = house_geom.distance(
-                        nearby_features.geometry.where(
-                            nearby_features.geometry.geom_type == 'Point',
-                            nearby_features.geometry.boundary
-                        )
-                    )
+        houses_gdf.loc[group.size().index, f'count_{tag}*{feature_type}_{radius}'] = group.size().values
+        houses_gdf.loc[group['distance'].median().index, f'median_{tag}*{feature_type}_{radius}'] = group['distance'].median().values
+        houses_gdf.loc[group['distance'].mean().index, f'mean_{tag}*{feature_type}_{radius}'] = group['distance'].mean().values
 
-        distances = np.array(distances)
-        # if area_calc:
-        #     areas = np.array(nearby_features.area) if areas else np.array([])
-
-        # Closest feature
-        if len(distances) > 0:
-            houses_gdf.at[i, f'closest_{tag}*{feature_type}'] = distances.min()
-
-        # For each radius
-        for radius in radii:
-            mask = distances <= radius
-            count = mask.sum()
-            houses_gdf.at[i, f'count_{tag}*{feature_type}_{radius}'] = count
-
-            if count > 0:
-                houses_gdf.at[i, f'median_{tag}*{feature_type}_{radius}'] = np.median(distances[mask])
-                houses_gdf.at[i, f'mean_{tag}*{feature_type}_{radius}'] = distances[mask].mean()
-
-                if area_calc:
-                    total_area= nearby_features.area[mask].sum()
-                    houses_gdf.at[i, f'total_area_{tag}*{feature_type}_{radius}'] = total_area
+        if area_calc:
+            houses_gdf.loc[group['area'].sum().index, f'total_area_{tag}*{feature_type}_{radius}'] = group['area'].sum().values
 
     return houses_gdf
 
