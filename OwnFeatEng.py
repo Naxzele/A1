@@ -5,6 +5,8 @@ from shapely.strtree import STRtree
 from tqdm import tqdm
 import numpy as np
 import geopandas as gpd
+from sklearn.feature_selection import mutual_info_regression
+import matplotlib.pyplot as plt
 
 class feature_engineering:
     def __init__(self, targets=None, transform_type=None, comp_type=None, comp_agg=None, groups=None, features=None, cl_name=None, clustering=False, cluster_range=None):
@@ -152,7 +154,7 @@ class feature_selection:
         return self.selected_features_, self.cluster_report_
     
 
-def add_geo_features_optimized(houses_gdf, features_gdf, tag, type, radii=[500, 1000, 1500, 2000], max_rad=10000, area_calc=False):
+def add_geo_features_optimized(houses_gdf, features_gdf, tag, feature_type, radii=[500, 1000, 1500, 2000], max_rad=10000, area_calc=False):
     """
     Optimized version that:
     1. Uses spatial indexing to only process nearby features
@@ -162,7 +164,7 @@ def add_geo_features_optimized(houses_gdf, features_gdf, tag, type, radii=[500, 
 
     # Filter features
     features = features_gdf[
-        (features_gdf[tag] == type) & 
+        (features_gdf[tag] == feature_type) & 
         (~features_gdf.geometry.is_empty)
     ].copy()
     
@@ -186,11 +188,15 @@ def add_geo_features_optimized(houses_gdf, features_gdf, tag, type, radii=[500, 
     max_radius = max_rad
     
     # Prepare result columns
-    for col in [f'closest_{tag}*{type}'] + \
-               [f'mean_{tag}*{type}_{r}' for r in radii] + \
-               [f'count_{tag}*{type}_{r}' for r in radii] + \
-               ([f'mean_area_{tag}*{type}_{r}' for r in radii] if area_calc else []):
-            houses_gdf[col] = max_radius+5000.00 if 'closest' in col else 0.00
+    for col in [f'closest_{tag}*{feature_type}'] + \
+               [f'median_{tag}*{feature_type}_{r}' for r in radii] + \
+               [f'mean_{tag}*{feature_type}_{r}' for r in radii] + \
+               [f'count_{tag}*{feature_type}_{r}' for r in radii] + \
+               ([f'total_area_{tag}*{feature_type}_{r}' for r in radii] if area_calc else []):
+            if ('count' in col) or ('total_area' in col):
+                houses_gdf[col] = 0.00
+            else:
+                houses_gdf[col] = max_radius+5000.00
 
     # Process each house
     for i, house in tqdm(houses_utm.iterrows(), total=len(houses_utm)):
@@ -203,37 +209,62 @@ def add_geo_features_optimized(houses_gdf, features_gdf, tag, type, radii=[500, 
             continue
 
         nearby_features = features_utm.iloc[possible_matches_idx]
-        distances = []
-        areas = [] if area_calc else None
-
-        for _, feature in nearby_features.iterrows():
-            feature_geom = feature.geometry
-            dist = house_geom.distance(feature_geom if feature_geom.geom_type == 'Point' else feature_geom.boundary)
-            distances.append(dist)
-
-            if area_calc and feature_geom.geom_type != 'Point':
-                areas.append(feature['area'])
+        distances = house_geom.distance(
+                        nearby_features.geometry.where(
+                            nearby_features.geometry.geom_type == 'Point',
+                            nearby_features.geometry.boundary
+                        )
+                    )
 
         distances = np.array(distances)
-        if area_calc:
-            areas = np.array(areas) if areas else np.array([])
+        # if area_calc:
+        #     areas = np.array(nearby_features.area) if areas else np.array([])
 
         # Closest feature
         if len(distances) > 0:
-            houses_gdf.at[i, f'closest_{tag}*{type}'] = distances.min()
+            houses_gdf.at[i, f'closest_{tag}*{feature_type}'] = distances.min()
 
         # For each radius
         for radius in radii:
             mask = distances <= radius
             count = mask.sum()
-            houses_gdf.at[i, f'count_{tag}*{type}_{radius}'] = count
+            houses_gdf.at[i, f'count_{tag}*{feature_type}_{radius}'] = count
 
             if count > 0:
-                houses_gdf.at[i, f'mean_{tag}*{type}_{radius}'] = distances[mask].mean()
+                houses_gdf.at[i, f'median_{tag}*{feature_type}_{radius}'] = np.median(distances[mask])
+                houses_gdf.at[i, f'mean_{tag}*{feature_type}_{radius}'] = distances[mask].mean()
 
-                if area_calc and len(areas) > 0:
-                    poly_mask = mask[:len(areas)]
-                    if poly_mask.any():
-                        houses_gdf.at[i, f'mean_area_{tag}*{type}_{radius}'] = areas[poly_mask].mean()
+                if area_calc:
+                    total_area= nearby_features.area[mask].sum()
+                    houses_gdf.at[i, f'total_area_{tag}*{feature_type}_{radius}'] = total_area
 
     return houses_gdf
+
+def make_mi_scores(X, y):
+    X = X.copy()
+    for colname in X.select_dtypes(["object", "category"]):
+        X[colname], _ = X[colname].factorize()
+    # All discrete features should now have integer dtypes
+    discrete_features = [pd.api.types.is_integer_dtype(t) for t in X.dtypes]
+    mi_scores = mutual_info_regression(X, y, discrete_features=discrete_features, random_state=0)
+    mi_scores = pd.Series(mi_scores, name="MI Scores", index=X.columns)
+    mi_scores = mi_scores.sort_values(ascending=False)
+    return mi_scores
+
+
+def plot_mi_scores(scores):
+    scores = scores.sort_values(ascending=True)
+    width = np.arange(len(scores))
+    ticks = list(scores.index)
+    plt.barh(width, scores)
+    plt.yticks(width, ticks)
+    plt.title("Mutual Information Scores")
+
+def SpecialTransform(df):
+    X = pd.DataFrame()
+    X['area_bed'] = df.area/(df.bedrooms+1)
+    X['area_foto'] = df.area/df.foto_amount
+    X.loc[df['foto_amount'] == 0, 'area_foto'] = 0
+    X['ev_area'] = df.energy_value/df.area
+    X['miss_tot'] = df.energy_value_miss*1 + df.area_miss*1 + df.advertiser_miss*1 + df.lat_miss*1 + df.subtype_miss*1
+    return X
