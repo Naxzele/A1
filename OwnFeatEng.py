@@ -199,32 +199,32 @@ def add_geo_features(houses_gdf, features_gdf, tag, feature_type, radii=[500, 10
         'distance': distances,
         'area': areas
     })
-
+    new_df = pd.DataFrame(index=houses_gdf.index)
     # Initialize result columns
     for col in [f'closest_{tag}*{feature_type}'] + \
                [f'median_{tag}*{feature_type}_{r}' for r in radii] + \
                [f'mean_{tag}*{feature_type}_{r}' for r in radii] + \
                [f'count_{tag}*{feature_type}_{r}' for r in radii] + \
                ([f'total_area_{tag}*{feature_type}_{r}' for r in radii] if area_calc else []):
-        houses_gdf[col] = 0.0 if ('count' in col or 'total_area' in col) else (max_rad + 5000.0)
+        new_df[col] = 0.0 if ('count' in col or 'total_area' in col) else (max_rad + 5000.0)
 
     # Closest distance
     closest_dist = result_df.groupby('house_idx')['distance'].min()
-    houses_gdf.loc[closest_dist.index, f'closest_{tag}*{feature_type}'] = closest_dist.values
+    new_df.loc[closest_dist.index, f'closest_{tag}*{feature_type}'] = closest_dist.values
 
     # Radius-based aggregations
     for radius in radii:
         mask = result_df['distance'] <= radius
         group = result_df[mask].groupby('house_idx')
 
-        houses_gdf.loc[group.size().index, f'count_{tag}*{feature_type}_{radius}'] = group.size().values
-        houses_gdf.loc[group['distance'].median().index, f'median_{tag}*{feature_type}_{radius}'] = group['distance'].median().values
-        houses_gdf.loc[group['distance'].mean().index, f'mean_{tag}*{feature_type}_{radius}'] = group['distance'].mean().values
+        new_df.loc[group.size().index, f'count_{tag}*{feature_type}_{radius}'] = group.size().values
+        new_df.loc[group['distance'].median().index, f'median_{tag}*{feature_type}_{radius}'] = group['distance'].median().values
+        new_df.loc[group['distance'].mean().index, f'mean_{tag}*{feature_type}_{radius}'] = group['distance'].mean().values
 
         if area_calc:
-            houses_gdf.loc[group['area'].sum().index, f'total_area_{tag}*{feature_type}_{radius}'] = group['area'].sum().values
+            new_df.loc[group['area'].sum().index, f'total_area_{tag}*{feature_type}_{radius}'] = group['area'].sum().values
 
-    return houses_gdf
+    return new_df
 
 def make_mi_scores(X, y):
     X = X.copy()
