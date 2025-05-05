@@ -7,6 +7,7 @@ import numpy as np
 import geopandas as gpd
 from sklearn.feature_selection import mutual_info_regression
 import matplotlib.pyplot as plt
+import gc
 
 class feature_engineering:
     def __init__(self, targets=None, transform_type=None, comp_type=None, comp_agg=None, groups=None, features=None, cl_name=None, clustering=False, cluster_range=None):
@@ -164,6 +165,8 @@ def add_geo_features(houses_gdf, features_gdf, tag, feature_type, radii=[500, 10
     utm_crs = houses_gdf.estimate_utm_crs()
     houses_utm = houses_gdf.to_crs(utm_crs)
     features_utm = features.to_crs(utm_crs)
+    del features, utm_crs
+    gc.collect()
 
     if area_calc:
         poly_mask = features_utm.geometry.type.isin(['Polygon', 'MultiPolygon'])
@@ -175,30 +178,49 @@ def add_geo_features(houses_gdf, features_gdf, tag, feature_type, radii=[500, 10
     houses_geom = houses_utm.geometry
     features_geom = features_utm.geometry
     tree = STRtree(features_geom)
+    del houses_utm
+    gc.collect()
+    print('Tree is created')
 
     # Get all intersecting pairs
     buffers = houses_geom.buffer(max_rad)
-    matches_idx = tree.query(buffers, predicate='intersects')
-    house_ix, feat_ix = matches_idx
+    house_ix, feat_ix = tree.query(buffers, predicate='intersects')
+    # house_ix, feat_ix = matches_idx
+    del tree
+    gc.collect()
+    print('Indexing is finished')
 
     house_pts = houses_geom.iloc[house_ix].reset_index(drop=True)
     feat_geom = features_geom.iloc[feat_ix].reset_index(drop=True)
+    print('Nearby geom created')
 
     # Use boundaries for polygons
     feat_geom_use = feat_geom.where(
         feat_geom.geom_type == 'Point',
         feat_geom.boundary
     )
+    del features_geom, feat_geom
+    gc.collect()
 
     # Compute distances
     distances = house_pts.distance(feat_geom_use)
+    del house_pts, feat_geom_use
+    gc.collect()
+    print('distances created')
     areas = features_utm.iloc[feat_ix].area.values
+    del features_utm, feat_ix
+    gc.collect()
+    print('areas created')
 
     result_df = pd.DataFrame({
         'house_idx': houses_geom.index[house_ix],
         'distance': distances,
         'area': areas
     })
+    del distances, areas, house_ix, houses_geom
+    gc.collect()
+    print('Result df is created')
+
     new_df = pd.DataFrame(index=houses_gdf.index)
     # Initialize result columns
     for col in [f'closest_{tag}*{feature_type}'] + \
@@ -211,6 +233,9 @@ def add_geo_features(houses_gdf, features_gdf, tag, feature_type, radii=[500, 10
     # Closest distance
     closest_dist = result_df.groupby('house_idx')['distance'].min()
     new_df.loc[closest_dist.index, f'closest_{tag}*{feature_type}'] = closest_dist.values
+    new_df.loc[closest_dist.index, f'closest_{tag}*{feature_type}'] = new_df.loc[closest_dist.index, f'closest_{tag}*{feature_type}'].fillna(max_rad+5000.0)
+    del closest_dist
+    gc.collect()
 
     # Radius-based aggregations
     for radius in radii:
